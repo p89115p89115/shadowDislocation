@@ -1,0 +1,67 @@
+#include <FastLED.h>
+
+// ==========================================
+// 🛠️ 根據你的 FCOB 燈條標籤全新設定
+// ==========================================
+#define LED_PIN     5      // 訊號線(DAT)一樣接在 ESP32 的 D5 (GPIO 5)
+#define NUM_LEDS    480    // 🔥 修正：160燈/米 * 3米 = 480 顆燈
+#define BRIGHTNESS  35     // 🔥 修正：FCOB密度極高，測試亮度設 35 即可，保護 ESP32 不過載
+#define LED_TYPE    WS2812B
+#define COLOR_ORDER GRB    // 標籤註明為 RGB IC，通常通訊順序維持 GRB
+
+CRGB leds[NUM_LEDS];
+
+void setup() {
+  Serial.begin(115200);
+  Serial.println("\n==========================================");
+  Serial.println("✨ FCOB 480燈 逐顆幻彩流線測試開始...");
+  Serial::print("👉 燈條連線提示：VCC(紅)->5V | GND(白)->GND | DAT(綠)->GPIO5\n");
+  Serial.println("==========================================");
+
+  // 初始化 FCOB 燈條
+  FastLED.addLeds<LED_TYPE, LED_PIN, COLOR_ORDER>(leds, NUM_LEDS).setCorrection(TypicalLEDStrip);
+  FastLED.setBrightness(BRIGHTNESS);
+  
+  // 開機完全清空燈條
+  FastLED.clear();
+  FastLED.show();
+}
+
+void loop() {
+  Serial.println("🔄 開始新一輪 480 燈滑順掃描...");
+
+  // 📥 正向流動：從第 0 顆跑到第 479 顆
+  for (int i = 0; i < NUM_LEDS; i++) {
+    // 🎨 讓 480 顆燈在推進時，顏色完美走完一個 HSV 彩虹圈
+    uint8_t currentHue = (i * 256 / NUM_LEDS);
+
+    leds[i] = CHSV(currentHue, 255, 255); // 點亮當前這格點
+    FastLED.show();
+
+    // 💡 因為 FCOB 密度極高（顆粒極小），delay 縮短到 5ms 跑起來才會像流水一樣絲滑
+    delay(5); 
+
+    // 關鍵安全防護：亮完立刻熄滅，確保只有單點移動，電流極低
+    leds[i] = CRGB::Black; 
+    
+    // 每跑 40 顆燈在電腦螢幕回報一次進度
+    if (i % 40 == 0) {
+      Serial.print("📡 燈條正常運作中，進度：");
+      Serial.print(i);
+      Serial.println(" / 480");
+    }
+  }
+
+  FastLED.clear();
+  FastLED.show();
+  delay(500); // 到底部短暫停頓 0.5 秒
+
+  // 📤 反向流動：從第 479 顆跑回第 0 顆
+  for (int i = NUM_LEDS - 1; i >= 0; i--) {
+    uint8_t currentHue = (i * 256 / NUM_LEDS);
+    leds[i] = CHSV(currentHue, 255, 255);
+    FastLED.show();
+    delay(5);
+    leds[i] = CRGB::Black;
+  }
+}

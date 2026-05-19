@@ -1,0 +1,55 @@
+#include <FastLED.h>
+
+// ==========================================
+// 🛠️ 硬體與 300 燈條呼吸燈設定
+// ==========================================
+#define LED_PIN     5      // 訊號線(DAT)接在 ESP32 的 P5 (GPIO 5)
+#define NUM_LEDS    300    // 測試原本的 300 燈
+#define LED_TYPE    WS2812B
+#define COLOR_ORDER GRB
+
+// 🚨 關鍵安全限制 🚨
+// 300燈全亮時，呼吸到最亮的值絕對不能調太高！設 15 可以在電腦 USB 供電下安全測試。
+#define MAX_BRIGHTNESS 15  
+#define MIN_BRIGHTNESS 0
+
+CRGB leds[NUM_LEDS];
+
+void setup() {
+  Serial.begin(115200);
+  Serial.println("\n==========================================");
+  Serial.println("🫁 300燈全亮 - 安全動態呼吸燈測試開始...");
+  Serial.println("==========================================");
+
+  // 初始化燈條
+  FastLED.addLeds<LED_TYPE, LED_PIN, COLOR_ORDER>(leds, NUM_LEDS).setCorrection(TypicalLEDStrip);
+  
+  // 初始設定為冰藍色 (Ice Blue)
+  // 你也可以改成 CRGB::Orange (橘色) 或 CRGB::WarmWhite (暖白)
+  fill_solid(leds, NUM_LEDS, CRGB::Orange);
+  
+  FastLED.setBrightness(MIN_BRIGHTNESS);
+  FastLED.show();
+}
+
+void loop() {
+  Serial.println("📈 呼吸燈：吸氣（逐漸變亮）...");
+  // 逐漸變亮
+  for (int b = MIN_BRIGHTNESS; b <= MAX_BRIGHTNESS; b++) {
+    FastLED.setBrightness(b);
+    FastLED.show();
+    delay(40); // 控制變亮的速度，數字越大呼吸越慢
+  }
+
+  delay(200); // 吸飽氣，短暫停頓 0.2 秒
+
+  Serial.println("📉 呼吸燈：呼氣（逐漸變暗）...");
+  // 逐漸變暗
+  for (int b = MAX_BRIGHTNESS; b >= MIN_BRIGHTNESS; b--) {
+    FastLED.setBrightness(b);
+    FastLED.show();
+    delay(40); // 控制變暗的速度
+  }
+
+  delay(500); // 呼完氣，吐盡後停頓 0.5 秒
+}
