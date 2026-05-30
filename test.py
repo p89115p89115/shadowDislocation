@@ -5,11 +5,12 @@ import os
 os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;udp|fflags;nobuffer|max_delay;50000|analyzeduration;10000|probesize;32"
 
 import cv2
-from ultralytics import YOLO
 import threading
 import time
 import numpy as np
-import torch
+import mediapipe as mp
+from mediapipe.tasks import python
+from mediapipe.tasks.python import vision
 
 # ==========================================
 # 🛡️ 核心：建立一個永遠只拿最新畫面的即時抓圖器 (保持不變)
@@ -53,38 +54,57 @@ class RTSPStreamReader:
         self.cap.release()
 
 # ==========================================
-# 🚀 星空高精準真實人影系統 (絕無殘影版)
+# 🚀 全域變數：接收新版 MediaPipe 異步回傳的遮罩結果
 # ==========================================
-if torch.cuda.is_available():
-    DEVICE = "cuda"
-    print("💡 成功啟用 NVIDIA CUDA 顯示卡硬體加速！")
-elif torch.backends.mps.is_available():
-    DEVICE = "mps"
-    print("💡 成功啟用 Apple Silicon MPS 圖像加速！")
-else:
-    DEVICE = "cpu"
-    print("⚠️ 未偵測到獨立顯卡，使用 CPU 運算。")
+latest_mask = None
+mask_lock = threading.Lock()
 
-# 初始化高精準 AI 實例分割模型
-print("⚡ 初始化 AI 實例分割大腦 (YOLOv8s-Seg)...")
-model_seg = YOLO("yolov8s-seg.pt").to(DEVICE)
+def receive_result_callback(result: vision.PoseLandmarkerResult, output_image: mp.Image, timestamp_ms: int):
+    global latest_mask
+    if result.segmentation_masks is not None and len(result.segmentation_masks) > 0:
+        raw_mask_mp = result.segmentation_masks[0]
+        mask_np = raw_mask_mp.numpy_view()
+        with mask_lock:
+            latest_mask = mask_np.copy()
+    else:
+        with mask_lock:
+            latest_mask = None
+
+# ==========================================
+# 🚀 星空新版 MediaPipe 完美真實人影系統
+# ==========================================
+print("⚡ 初始化最新版 MediaPipe Tasks 骨架去背引擎...")
+
+MODEL_PATH = "pose_landmarker_full.task"
+if not os.path.exists(MODEL_PATH):
+    raise FileNotFoundError(f"❌ 找不到模型檔！請確認檔案存在。")
+
+base_options = python.BaseOptions(model_asset_path=MODEL_PATH)
+options = vision.PoseLandmarkerOptions(
+    base_options=base_options,
+    running_mode=vision.RunningMode.LIVE_STREAM,
+    output_segmentation_masks=True,
+    min_pose_detection_confidence=0.75,   
+    min_pose_presence_confidence=0.75,
+    min_tracking_confidence=0.75,
+    result_callback=receive_result_callback
+)
+
+landmarker = vision.PoseLandmarker.create_from_options(options)
 
 # 啟動零延遲抓圖器
 stream_url = "rtsp://localhost:8554/cam"
 reader = RTSPStreamReader(stream_url).start()
 
-# 🔥 【黃金視覺與去殘影設定】
-BLUR_STRENGTH = 25                  # 模糊程度 (奇數): 控制影子邊緣的柔和度（越小越銳利）
+# 🔥 【黃金視覺與防抖設定】
+BLUR_STRENGTH = 67                  # 高斯模糊強度
 DILATE_KERNEL_SIZE = 9              # 輪廓外擴程度
-PROCESSING_WIDTH = 640              # 處理解析度（若顯卡效能夠強，可調高至 960 獲得極致精準度）
+PROCESSING_WIDTH = 640              # 處理解析度
+HORROR_MODE = False                 # 恐怖影子模式開關
 
-# 信心度平衡點：0.30 可以有效防止漏抓，同時避免過多雜訊
-GLOBAL_CONF_THRESH = 0.30           
-
-# 初始化形態學運算核心 (單張影像去噪填充，完全不依賴歷史影格)
+# 初始化形態學運算核心
 dilate_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (DILATE_KERNEL_SIZE, DILATE_KERNEL_SIZE))
-close_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))   # 用於填補內部空洞
-open_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))    # 用於剔除背景亂閃的雜訊
+close_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 11))
 
 # --- 🌌 載入本地星空背景 ---
 STARRY_SKY_FILENAME = "sky.png"
@@ -97,7 +117,8 @@ else:
 
 starry_sky_canvas_resized = None
 
-print(f"👤 零延遲無殘影星空剪影系統啟動中...")
+print(f"👤 零延遲、極低敏感抗抖動星空剪影系統啟動中...")
+print("⚡ 按 'h' 鍵開啟/關閉 💀 恐怖軀體大撕裂模式")
 print("⚡ 按 'q' 鍵退出程式")
 
 while reader.started:
@@ -105,49 +126,108 @@ while reader.started:
     if not success:
         continue
 
-    # 降低處理解析度 (維持流暢度)
+    # 監聽鍵盤按鍵
+    key = cv2.waitKey(1) & 0xFF
+    if key == ord("h"):
+        HORROR_MODE = not HORROR_MODE
+        print(f"💀 恐怖影子模式: {'開啟' if HORROR_MODE else '關閉'}")
+    elif key == ord("q"):
+        break
+
     h_orig, w_orig = frame.shape[:2]
     aspect_ratio = h_orig / w_orig
     p_height = int(PROCESSING_WIDTH * aspect_ratio)
     frame_resized = cv2.resize(frame, (PROCESSING_WIDTH, p_height), interpolation=cv2.INTER_NEAREST)
 
-    # 動態調整星空背景大小
     if starry_sky_canvas_resized is None or starry_sky_canvas_resized.shape[:2] != (p_height, PROCESSING_WIDTH):
         if starry_sky_img is not None:
             starry_sky_canvas_resized = cv2.resize(starry_sky_img, (PROCESSING_WIDTH, p_height), interpolation=cv2.INTER_AREA)
         else:
             starry_sky_canvas_resized = np.zeros((p_height, PROCESSING_WIDTH, 3), dtype=np.uint8)
 
-    # 執行 Seg 辨識
-    results_seg = model_seg(frame_resized, conf=GLOBAL_CONF_THRESH, classes=[0], stream=True, verbose=False)
+    frame_rgb = cv2.cvtColor(frame_resized, cv2.COLOR_BGR2RGB)
+    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
     
-    # 建立當前影格的獨立遮罩
-    mask_resized_seg = np.zeros((p_height, PROCESSING_WIDTH), dtype=np.uint8)
+    timestamp_ms = int(time.time() * 1000)
+    landmarker.detect_async(mp_image, timestamp_ms)
 
-    for result_seg in results_seg:
-        if result_seg.masks is not None:
-            masks = result_seg.masks.data.cpu().numpy()
-            combined_mask_seg = np.any(masks, axis=0)
-            mask_raw_seg_255 = (combined_mask_seg * 255).astype(np.uint8)
-            mask_resized_seg = cv2.resize(mask_raw_seg_255, (PROCESSING_WIDTH, p_height), interpolation=cv2.INTER_NEAREST)
+    with mask_lock:
+        current_mask = latest_mask.copy() if latest_mask is not None else None
 
-    # --- 🔥 完全沒有歷史影格干涉的「即時後處理」 ---
-    if np.any(mask_resized_seg > 0):
-        # 1. 形態學開運算：直接切斷、濾除背景中單點亂閃的錯誤小噪點
-        cleaned_mask = cv2.morphologyEx(mask_resized_seg, cv2.MORPH_OPEN, open_kernel)
+    # 1. 初始化基礎遮罩
+    raw_mask_255 = np.zeros((p_height, PROCESSING_WIDTH), dtype=np.uint8)
+    if current_mask is not None:
+        resized_raw_mask = cv2.resize(current_mask, (PROCESSING_WIDTH, p_height))
+        raw_mask_255 = (resized_raw_mask > 0.65).astype(np.uint8) * 255
+
+    # 2. 創建最終用於渲染的平滑遮罩
+    smooth_mask = np.zeros_like(raw_mask_255)
+
+    if np.any(raw_mask_255 > 0):
+        closed_mask = cv2.morphologyEx(raw_mask_255, cv2.MORPH_CLOSE, close_kernel)
+        contours, _ = cv2.findContours(closed_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         
-        # 2. 形態學閉運算：將人體內部由於反光、衣服顏色導致的未偵測空洞強制填滿
-        filled_mask = cv2.morphologyEx(cleaned_mask, cv2.MORPH_CLOSE, close_kernel)
-        
-        # 3. 邊緣膨脹加粗
-        dilated_mask = cv2.dilate(filled_mask, dilate_kernel, iterations=1)
+        if contours:
+            largest_contour = max(contours, key=cv2.contourArea)
+            
+            if cv2.contourArea(largest_contour) > 3000:
+                epsilon = 0.003 * cv2.arcLength(largest_contour, True)
+                approx_contour = cv2.approxPolyDP(largest_contour, epsilon, True)
+                
+                cv2.drawContours(smooth_mask, [approx_contour], -1, 255, -1)
 
-        # 4. 高斯模糊柔邊
+                # ==================================================================
+                # 💀 恐怖雙向十字錯位影子模式 (完美移位軀體) 💀
+                # ==================================================================
+                if HORROR_MODE:
+                    x_b, y_b, w_b, h_b = cv2.boundingRect(approx_contour)
+                    
+                    # 🌟 核心修正：將切片高度擴大到 60% (h_b * 0.60)，確保整條胸膛、雙肩與頭部被一併切下來位移
+                    slice_height = int(h_b * 0.60)
+                    y_start = y_b
+                    y_end = min(p_height, y_b + slice_height)
+                    
+                    if y_end > y_start and w_b > 0:
+                        upper_body_patch = smooth_mask[y_start:y_end, 0:PROCESSING_WIDTH].copy()
+                        # 清空原本位置的上半身
+                        smooth_mask[y_start:y_end, 0:PROCESSING_WIDTH] = 0
+                        
+                        # 🌟 控制：【左右位移 50 像素】與【上下位移 -40 像素】
+                        offset_x = 50 
+                        offset_y = -40  # 負值往上移，正值往下移
+                        
+                        M_cross = np.float32([[1, 0, offset_x], [0, 1, offset_y]])
+                        shifted_upper_body = cv2.warpAffine(upper_body_patch, M_cross, (PROCESSING_WIDTH, y_end - y_start))
+                        
+                        # 重新貼合
+                        smooth_mask[y_start:y_end, 0:PROCESSING_WIDTH] = cv2.bitwise_or(
+                            smooth_mask[y_start:y_end, 0:PROCESSING_WIDTH], shifted_upper_body
+                        )
+
+                    # 效果 2：下半身觸手巨大化延伸
+                    y_mid = y_b + int(h_b * 0.5)
+                    if p_height > y_mid:
+                        lower_body_patch = smooth_mask[y_mid:p_height, 0:PROCESSING_WIDTH].copy()
+                        
+                        pts1 = np.float32([[0, 0], [PROCESSING_WIDTH, 0], [0, p_height - y_mid], [PROCESSING_WIDTH, p_height - y_mid]])
+                        pts2 = np.float32([[-30, 0], [PROCESSING_WIDTH + 30, 0], [-80, p_height - y_mid + 40], [PROCESSING_WIDTH + 80, p_height - y_mid + 40]])
+                        
+                        M_claw = cv2.getPerspectiveTransform(pts1, pts2)
+                        stretched_lower_body = cv2.warpPerspective(lower_body_patch, M_claw, (PROCESSING_WIDTH, p_height - y_mid))
+                        
+                        smooth_mask[y_mid:p_height, 0:PROCESSING_WIDTH] = cv2.bitwise_or(
+                            smooth_mask[y_mid:p_height, 0:PROCESSING_WIDTH], stretched_lower_body
+                        )
+                # ==================================================================
+
+    # --- 🌌 影像混合與柔邊渲染 ---
+    if np.any(smooth_mask > 0):
+        dilated_mask = cv2.dilate(smooth_mask, dilate_kernel, iterations=1)
+
         ksize = int(BLUR_STRENGTH)
         if ksize % 2 == 0: ksize += 1
         smoothed_mask = cv2.GaussianBlur(dilated_mask, (ksize, ksize), 0)
 
-        # --- 🌌 星空背景與純黑影子 Alpha 權重混合 ---
         alpha = cv2.bitwise_not(smoothed_mask).astype(float) / 255.0
         alpha_3ch = cv2.merge([alpha, alpha, alpha])
 
@@ -155,15 +235,11 @@ while reader.started:
         blended = starry_sky_canvas_resized.astype(float) * alpha_3ch + black_canvas.astype(float) * (1.0 - alpha_3ch)
         annotated_frame_resized = blended.astype(np.uint8)
     else:
-        # 當前影格沒人，立刻切換回純星空（絕不留戀任何上個畫面）
         annotated_frame_resized = starry_sky_canvas_resized
 
-    # 放大回原始顯示尺寸
     final_output = cv2.resize(annotated_frame_resized, (w_orig, h_orig), interpolation=cv2.INTER_LINEAR)
     cv2.imshow("Zero Latency Dislocation Shadow Monitor", final_output)
 
-    if cv2.waitKey(1) & 0xFF == ord("q"):
-        break
-
+landmarker.close()
 reader.stop()
 cv2.destroyAllWindows()
